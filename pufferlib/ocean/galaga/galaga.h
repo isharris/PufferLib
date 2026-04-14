@@ -325,7 +325,7 @@ static void check_enemy_rocket_player_collision(Galaga *env) {
                          env->player_x, py,
                          PLAYER_HALF_W, PLAYER_HALF_H)) {
             env->terminals[0] = 1;
-            env->rewards[0] -= 1.0f;
+            env->rewards[0] -= 5.0f;
             return;
         }
     }
@@ -340,7 +340,7 @@ static void check_enemy_player_collision(Galaga *env) {
                          env->player_x, py,
                          PLAYER_HALF_W, PLAYER_HALF_H)) {
             env->terminals[0] = 1;
-            env->rewards[0] -= 1.0f;
+            env->rewards[0] -= 5.0f;
             return;
         }
     }
