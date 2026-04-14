@@ -91,6 +91,9 @@ dm_lab = [
 galaga = [ 
     'gym==0.23',
     'gymnasium==0.29.1',
+    'matplotlib',
+    'imageio',
+    'numpy'
 ]
 
 griddly = [
@@ -109,7 +112,7 @@ kinetix = [
 magent = [
     'gym==0.23',
     'gymnasium==0.29.1',
-    'pettingzoo==1.19.0',
+    'pettingzoo>=1.19.0',
     'magent==0.2.4',
     # The Magent2 package is broken for now
     #'magent2==0.3.2',
@@ -146,7 +149,7 @@ microrts = [
 
 minerl = [
     'gym==0.17.0',
-    'gymnasium==0.29.1',
+    'gymnasium>=0.29.1',
     #'git+https://github.com/minerllabs/minerl'
     # Compatiblity warning with urllib3 and chardet
     #'requests==2.31.0',
