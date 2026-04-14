@@ -1,3 +1,11 @@
+/* Pure C Raylib demo — same simulator as the Python binding (galaga.h).
+ * Local:  bash scripts/build_ocean.sh galaga local
+ *         bash scripts/build_ocean.sh galaga fast
+ * Web:    bash scripts/build_ocean.sh galaga web
+ *         → build_web/galaga/game.html (needs Emscripten + raylib-5.5_webassembly
+ *         in the repo root; see scripts/build_ocean.sh). Same pattern as squared.
+ * Controls: hold Left Shift — A/Left, D/Right, Space to shoot; else random actions.
+ */
 #include "galaga.h"
 
 int main() {
