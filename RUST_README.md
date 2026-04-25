@@ -1,121 +1,114 @@
-# Drive (Rust)
+# PufferLib (Rust)
 
-A Rust reimplementation of the PufferLib Drive environment, replacing the C core with a PyO3-based extension module. The Rust version is a drop-in replacement for training -- same observation space, action space, and reward semantics.
+PufferLib's native code is now a single Rust crate at the repo root, built and
+installed by [maturin](https://www.maturin.rs/). The crate is exposed to Python
+as the package `pufferlib.bindings`, with one submodule per environment plus
+shared kernels (e.g. the V-trace advantage kernel).
+
+```python
+from pufferlib.bindings import drive       # env: pufferlib/ocean/drive
+from pufferlib.bindings import puffernet   # V-trace advantage kernel
+```
 
 ## Prerequisites
 
-- Python 3.8+
-- Rust toolchain (rustc, cargo)
-- maturin
-- PufferLib installed (`pip install -e .`)
-- Drive map binaries under `resources/drive/binaries/`
+- Python 3.9+
+- Rust toolchain (`rustc`, `cargo`)
+- Optional: `nvcc` and `CUDA_HOME` set to enable the GPU V-trace kernel
+- Drive map binaries under `pufferlib/resources/drive/binaries/`
 
-### Installing Rust
+Installing Rust:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 ```
 
-### Installing maturin
-
-```bash
-uv pip install maturin
-```
-
 ## Build
 
-From the repo root:
+A regular editable install from the repo root builds the Rust extension in
+place:
 
 ```bash
-cd pufferlib/ocean/drive_rust
+uv pip install -e .
+# or
+pip install -e .
+```
+
+This produces `pufferlib/bindings.cpython-<tag>.so` so
+`from pufferlib.bindings import drive, puffernet` works immediately.
+
+The CUDA V-trace kernel is compiled automatically when `CUDA_HOME` is set at
+build time. Otherwise the CPU implementation is used (and `puffernet.has_cuda()`
+returns `False`).
+
+To rebuild only the Rust extension (after editing `src/*.rs` or
+`cuda/*.cu`):
+
+```bash
 maturin develop --release
-cp target/release/libbinding.dylib binding.cpython-311-darwin.so   # macOS
-# cp target/release/libbinding.so binding.cpython-311-x86_64-linux-gnu.so  # Linux
-cd ../../..
 ```
 
-`maturin develop` builds the wheel and installs it to site-packages, but because PufferLib is itself installed editable, Python resolves `pufferlib.ocean.drive_rust` to the source tree -- so we also copy the freshly-built dylib into the package directory under the CPython-tagged name. After this, `from pufferlib.ocean.drive_rust import binding` works immediately.
-
-For a debug build (slower, but with better panic messages):
+For a faster, debug build:
 
 ```bash
-cd pufferlib/ocean/drive_rust
 maturin develop
-cp target/debug/libbinding.dylib binding.cpython-311-darwin.so
-cd ../../..
-```
-
-If you ever change `src/lib.rs` and the build appears to finish in <1s with no `Compiling pufferlib-drive-rust` line, cargo's incremental cache got confused; force a clean rebuild with:
-
-```bash
-cargo clean && rm -f binding.cpython-311-darwin.so && maturin develop --release && cp target/release/libbinding.dylib binding.cpython-311-darwin.so
 ```
 
 ## Run
 
-### Training
-
 ```bash
-puffer train puffer_drive_rust
-```
-
-On Mac (no CUDA):
-
-```bash
-puffer train puffer_drive_rust --train.device cpu
-```
-
-### Parity test
-
-Runs the C and Rust environments side-by-side with identical deterministic actions and compares observations, rewards, and terminals at every step:
-
-```bash
-python -m pufferlib.ocean.drive_rust.test_parity
-```
-
-### Using in Python directly
-
-```python
-from pufferlib.ocean.drive_rust.drive_rust import DriveRust
-
-env = DriveRust(num_agents=64, num_maps=10)
-obs, info = env.reset()
-
-for _ in range(91):
-    actions = env.single_action_space.sample()  # per-agent
-    # ... expand to all agents ...
-    obs, rewards, terminals, truncations, info = env.step(actions)
-
-env.close()
+puffer train puffer_drive
+# CPU-only host:
+puffer train puffer_drive --train.device cpu
 ```
 
 ## Project structure
 
 ```
-pufferlib/ocean/drive_rust/
-├── Cargo.toml          Rust crate config (pyo3, numpy, rand)
-├── pyproject.toml      maturin build configuration
-├── __init__.py         Python package marker
-├── drive_rust.py       DriveRust(PufferEnv) -- Python wrapper
-├── test_parity.py      C-vs-Rust golden-trace parity test
-└── src/
-    ├── lib.rs          PyO3 module: shared, env_init, vectorize, vec_*
-    ├── types.rs        Constants, Entity, Log, Drive structs
-    ├── map.rs          Binary map loader with Result error handling
-    └── sim.rs          Grid, collision, dynamics, observations, step/reset
+Cargo.toml             single PyO3 crate (lib name = "bindings")
+build.rs               compiles cuda/ when CUDA_HOME is set
+cuda/
+  puff_advantage.cu    V-trace CUDA kernel
+src/
+  lib.rs               #[pymodule] bindings: registers env + kernel submodules
+  envs/
+    mod.rs             registers each env
+    drive/
+      mod.rs           PyO3 wrappers: shared, env_init, vec_*
+      types.rs         Drive / Entity / Log
+      map.rs           binary map loader
+      sim.rs           grid / collision / dynamics / observations
+  puffernet/
+    mod.rs             PyO3 wrapper for compute_puff_advantage
+    cpu.rs             safe Rust CPU implementation
+pufferlib/
+  bindings.<tag>.so    built by maturin, imported as pufferlib.bindings
+  ocean/drive/drive.py thin PufferEnv wrapper around bindings.drive
+  pufferl.py           uses pufferlib.bindings.puffernet for advantages
 ```
 
-## Key improvements
+## Adding a new env
 
-- **No segfaults on missing files.** The C version silently returns NULL from `fopen` and crashes downstream. The Rust version returns a `Result` that surfaces as a Python exception with the file path and IO error message.
+1. Create `src/envs/<name>/{mod.rs, types.rs, sim.rs, ...}` with the
+   simulation code and PyO3 wrappers, plus a `pub fn register(py, parent)`.
+2. Add `pub mod <name>;` and one `<name>::register(py, parent)?;` line to
+   `src/envs/mod.rs`.
+3. Create `pufferlib/ocean/<name>/<name>.py` with a `PufferEnv` subclass
+   that does `from pufferlib.bindings import <name> as binding`.
+4. Register the env in `pufferlib/ocean/environment.py`'s `MAKE_FUNCTIONS`
+   and add a config under `pufferlib/config/ocean/<name>.ini`.
 
-- **No Raylib dependency for training.** The Rust crate builds without linking Raylib, so headless training servers don't need graphics libraries. The existing C `drive` binary still handles interactive rendering and policy demos.
+## Notes on the migration
 
-- **Automatic memory management.** Entity trajectories, grid cells, and neighbor caches are owned `Vec`s that are freed on drop. No manual `free()` calls, no double-free or use-after-free risks.
-
-- **Explicit buffer boundaries.** The unsafe raw-pointer interface with NumPy is confined to `env_init` (pointer setup), `compute_observations`, and `c_step` (reward/terminal writes). All internal simulation logic is safe Rust.
-
-- **Parallel-safe registration.** Registered as `puffer_drive_rust` alongside the original `puffer_drive`, so both can coexist. No changes to the C build or existing training configs.
-
-- **Portable binary format.** The Rust map loader reads the same `map_XXX.bin` files produced by `drive.py`'s `save_map_binary`. No format conversion needed.
+- The previous C `drive` env, the C++ V-trace kernel
+  (`pufferlib/extensions/`), the per-env `setup.py` plumbing, and the
+  nested `pyproject.toml` under `drive_rust/` have all been removed. The
+  Rust simulator and the Rust V-trace kernel replace them.
+- `pufferlib._C` is gone. `pufferl.py` now imports
+  `from pufferlib.bindings import puffernet` and dispatches via raw
+  `tensor.data_ptr()`s, so there's no PyTorch C++ extension to compile.
+- `pufferlib.ocean.drive` is the canonical Drive env (no `_rust` suffix).
+  There is only one Drive now, and it is Rust.
+- Rendering (Raylib) has not yet been ported to Rust; this is a follow-up
+  step.

@@ -32,9 +32,13 @@ import pufferlib.sweep
 import pufferlib.vector
 import pufferlib.pytorch
 try:
-    from pufferlib import _C
-except ImportError:
-    raise ImportError('Failed to import C/CUDA advantage kernel. If you have non-default PyTorch, try installing with --no-build-isolation')
+    from pufferlib.bindings import puffernet
+except ImportError as e:
+    raise ImportError(
+        'Failed to import the Rust V-trace kernel (pufferlib.bindings.puffernet). '
+        'Reinstall PufferLib with `uv pip install -e .` (set CUDA_HOME first '
+        'to enable the GPU kernel).'
+    ) from e
 
 import rich
 import rich.traceback
@@ -46,13 +50,10 @@ rich.traceback.install(show_locals=False)
 import signal # Aggressively exit on ctrl+c
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
 
-from torch.utils.cpp_extension import (
-    CUDA_HOME,
-    ROCM_HOME
-)
-# Assume advantage kernel has been built if torch has been compiled with CUDA or HIP support
-# and can find CUDA or HIP in the system
-ADVANTAGE_CUDA = bool(CUDA_HOME or ROCM_HOME)
+# True iff the Rust extension was built against CUDA. Whether we actually
+# dispatch to the CUDA kernel for a given call also depends on the input
+# tensors' device (see `compute_puff_advantage` below).
+ADVANTAGE_CUDA = puffernet.has_cuda()
 
 class PuffeRL:
     def __init__(self, config, vecenv, policy, logger=None):
@@ -659,24 +660,35 @@ class PuffeRL:
 
 def compute_puff_advantage(values, rewards, terminals,
         ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip):
-    '''CUDA kernel for puffer advantage with automatic CPU fallback. You need
-    nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
-    compile the fast version.'''
-
+    '''V-trace advantage kernel implemented in Rust (pufferlib.bindings.puffernet).
+    Dispatches to CUDA when the input tensors live on a CUDA device and the
+    extension was built with CUDA_HOME set; otherwise runs on CPU after
+    moving the inputs there.'''
     device = values.device
-    if not ADVANTAGE_CUDA:
-        values = values.cpu()
-        rewards = rewards.cpu()
-        terminals = terminals.cpu()
-        ratio = ratio.cpu()
-        advantages = advantages.cpu()
+    use_cuda = ADVANTAGE_CUDA and values.is_cuda
 
-    torch.ops.pufferlib.compute_puff_advantage(values, rewards, terminals,
-        ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip)
+    if not use_cuda:
+        values = values.cpu().contiguous()
+        rewards = rewards.cpu().contiguous()
+        terminals = terminals.cpu().contiguous()
+        ratio = ratio.cpu().contiguous()
+        advantages = advantages.cpu().contiguous()
+    else:
+        for t in (values, rewards, terminals, ratio, advantages):
+            assert t.is_contiguous(), 'V-trace inputs must be contiguous'
 
-    if not ADVANTAGE_CUDA:
+    num_steps, horizon = values.shape
+    puffernet.compute_puff_advantage(
+        values.data_ptr(), rewards.data_ptr(), terminals.data_ptr(),
+        ratio.data_ptr(), advantages.data_ptr(),
+        num_steps, horizon,
+        float(gamma), float(gae_lambda),
+        float(vtrace_rho_clip), float(vtrace_c_clip),
+        use_cuda,
+    )
+
+    if not use_cuda:
         return advantages.to(device)
-
     return advantages
 
 

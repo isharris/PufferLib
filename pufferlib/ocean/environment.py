@@ -150,7 +150,6 @@ MAKE_FUNCTIONS = {
     'grid': 'Grid',
     'shared_pool': 'PyCPR',
     'impulse_wars': 'ImpulseWars',
-    'drive': 'Drive',
     'pacman': 'Pacman',
     'tmaze': 'TMaze',
     'checkers': 'Checkers',
@@ -162,7 +161,7 @@ MAKE_FUNCTIONS = {
     'spaces': make_spaces,
     'multiagent': make_multiagent,
     'slimevolley': 'SlimeVolley',
-    'drive_rust': 'DriveRust',
+    'drive': 'Drive',
 }
 
 def env_creator(name='squared', *args, **kwargs):
