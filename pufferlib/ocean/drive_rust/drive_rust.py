@@ -41,15 +41,20 @@ class DriveRust(pufferlib.PufferEnv):
         )
         self.single_action_space = gymnasium.spaces.MultiDiscrete([7, 13])
 
-        binary_path = "resources/drive/binaries/map_000.bin"
-        if not os.path.exists(binary_path):
+        self.binaries_dir = os.path.join(
+            pufferlib.__path__[0], "resources", "drive", "binaries"
+        )
+        sample_binary = os.path.join(self.binaries_dir, "map_000.bin")
+        if not os.path.exists(sample_binary):
             raise FileNotFoundError(
-                f"Required file {binary_path} not found. "
+                f"Required file {sample_binary} not found. "
                 "Please ensure the Drive maps are downloaded and installed correctly per docs."
             )
 
         agent_offsets, map_ids, num_envs = binding.shared(
-            num_agents=num_agents, num_maps=num_maps
+            num_agents=num_agents,
+            num_maps=num_maps,
+            binaries_dir=self.binaries_dir,
         )
         self.num_agents = num_agents
         self.agent_offsets = agent_offsets
@@ -76,6 +81,7 @@ class DriveRust(pufferlib.PufferEnv):
                 spawn_immunity_timer=spawn_immunity_timer,
                 map_id=map_ids[i],
                 max_agents=nxt - cur,
+                binaries_dir=self.binaries_dir,
             )
             env_ids.append(env_id)
 
@@ -104,7 +110,9 @@ class DriveRust(pufferlib.PufferEnv):
             self.tick = 0
             binding.vec_close(self.c_envs)
             agent_offsets, map_ids, num_envs = binding.shared(
-                num_agents=self.num_agents, num_maps=self.num_maps
+                num_agents=self.num_agents,
+                num_maps=self.num_maps,
+                binaries_dir=self.binaries_dir,
             )
             env_ids = []
             seed = np.random.randint(0, 2**32 - 1)
@@ -126,6 +134,7 @@ class DriveRust(pufferlib.PufferEnv):
                     spawn_immunity_timer=self.spawn_immunity_timer,
                     map_id=map_ids[i],
                     max_agents=nxt - cur,
+                    binaries_dir=self.binaries_dir,
                 )
                 env_ids.append(env_id)
             self.c_envs = binding.vectorize(*env_ids)

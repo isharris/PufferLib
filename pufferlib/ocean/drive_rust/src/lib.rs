@@ -16,8 +16,12 @@ unsafe fn get_vec(handle: usize) -> &'static mut VecEnv {
 }
 
 #[pyfunction]
-#[pyo3(signature = (*, num_agents, num_maps))]
-fn shared(num_agents: i32, num_maps: i32) -> PyResult<(Vec<i64>, Vec<i64>, i64)> {
+#[pyo3(signature = (*, num_agents, num_maps, binaries_dir))]
+fn shared(
+    num_agents: i32,
+    num_maps: i32,
+    binaries_dir: &str,
+) -> PyResult<(Vec<i64>, Vec<i64>, i64)> {
     let mut rng = rand::thread_rng();
     let mut total = 0i32;
     let mut env_count = 0usize;
@@ -27,7 +31,7 @@ fn shared(num_agents: i32, num_maps: i32) -> PyResult<(Vec<i64>, Vec<i64>, i64)>
 
     while total < num_agents && env_count < max_envs {
         let map_id = rng.gen_range(0..num_maps);
-        let path = format!("resources/drive/binaries/map_{:03}.bin", map_id);
+        let path = format!("{}/map_{:03}.bin", binaries_dir, map_id);
         let mut env = Drive::new();
         env.map_name = path;
         let (entities, no, nr) = map::load_map_binary(&env.map_name).map_err(|e| {
@@ -55,13 +59,13 @@ fn shared(num_agents: i32, num_maps: i32) -> PyResult<(Vec<i64>, Vec<i64>, i64)>
 }
 
 #[pyfunction]
-#[pyo3(signature = (observations, actions, rewards, terminals, truncations, seed, **kwargs))]
+#[pyo3(signature = (observations, actions, rewards, terminals, _truncations, _seed, **kwargs))]
 fn env_init(
-    observations: &Bound<'_, numpy::PyArray1<f32>>,
-    actions: &Bound<'_, numpy::PyArray1<i32>>,
-    rewards: &Bound<'_, numpy::PyArray1<f32>>,
-    terminals: &Bound<'_, numpy::PyArray1<u8>>,
-    _truncations: &Bound<'_, numpy::PyArray1<u8>>,
+    observations: &Bound<'_, numpy::PyUntypedArray>,
+    actions: &Bound<'_, numpy::PyUntypedArray>,
+    rewards: &Bound<'_, numpy::PyUntypedArray>,
+    terminals: &Bound<'_, numpy::PyUntypedArray>,
+    _truncations: &Bound<'_, numpy::PyUntypedArray>,
     _seed: i32,
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<usize> {
@@ -82,6 +86,11 @@ fn env_init(
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))?
             .extract::<i32>()
     };
+    let get_s = |key: &str| -> PyResult<String> {
+        kw.get_item(key)?
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))?
+            .extract::<String>()
+    };
 
     let mut env = Box::new(Drive::new());
 
@@ -100,8 +109,9 @@ fn env_init(
     env.spawn_immunity_timer = get_i("spawn_immunity_timer")?;
     let map_id = get_i("map_id")?;
     let max_agents = get_i("max_agents")?;
+    let binaries_dir = get_s("binaries_dir")?;
 
-    env.map_name = format!("resources/drive/binaries/map_{:03}.bin", map_id);
+    env.map_name = format!("{}/map_{:03}.bin", binaries_dir, map_id);
     env.num_agents = max_agents;
     env.init()
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
@@ -152,7 +162,7 @@ fn vec_log(py: Python<'_>, handle: usize) -> PyResult<PyObject> {
             agg.add_from(&env.log);
             env.log = Log::default();
         }
-        let dict = PyDict::new(py);
+        let dict = PyDict::new_bound(py);
         if agg.n == 0.0 {
             return Ok(dict.into());
         }

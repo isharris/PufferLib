@@ -7,13 +7,15 @@ Usage (from repo root, after building both bindings):
     python -m pufferlib.ocean.drive_rust.test_parity
 
 Requires:
-  - resources/drive/binaries/map_000.bin  (at least one map)
+  - pufferlib/resources/drive/binaries/map_000.bin  (at least one map)
   - Both C and Rust bindings installed
 """
 
 import numpy as np
 import sys
 import os
+
+import pufferlib
 
 SEED = 42
 NUM_AGENTS = 16
@@ -42,8 +44,11 @@ def make_rust_env():
 
 
 def run_parity():
-    if not os.path.exists("resources/drive/binaries/map_000.bin"):
-        print("SKIP: map binaries not found")
+    sample_binary = os.path.join(
+        pufferlib.__path__[0], "resources", "drive", "binaries", "map_000.bin"
+    )
+    if not os.path.exists(sample_binary):
+        print(f"SKIP: map binaries not found at {sample_binary}")
         sys.exit(0)
 
     try:

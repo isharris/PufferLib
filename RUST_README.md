@@ -20,7 +20,7 @@ source ~/.cargo/env
 ### Installing maturin
 
 ```bash
-pip install maturin
+uv pip install maturin
 ```
 
 ## Build
@@ -30,17 +30,26 @@ From the repo root:
 ```bash
 cd pufferlib/ocean/drive_rust
 maturin develop --release
+cp target/release/libbinding.dylib binding.cpython-311-darwin.so   # macOS
+# cp target/release/libbinding.so binding.cpython-311-x86_64-linux-gnu.so  # Linux
 cd ../../..
 ```
 
-This compiles the Rust crate and installs the `binding` extension module in-place so that `from pufferlib.ocean.drive_rust import binding` works immediately.
+`maturin develop` builds the wheel and installs it to site-packages, but because PufferLib is itself installed editable, Python resolves `pufferlib.ocean.drive_rust` to the source tree -- so we also copy the freshly-built dylib into the package directory under the CPython-tagged name. After this, `from pufferlib.ocean.drive_rust import binding` works immediately.
 
 For a debug build (slower, but with better panic messages):
 
 ```bash
 cd pufferlib/ocean/drive_rust
 maturin develop
+cp target/debug/libbinding.dylib binding.cpython-311-darwin.so
 cd ../../..
+```
+
+If you ever change `src/lib.rs` and the build appears to finish in <1s with no `Compiling pufferlib-drive-rust` line, cargo's incremental cache got confused; force a clean rebuild with:
+
+```bash
+cargo clean && rm -f binding.cpython-311-darwin.so && maturin develop --release && cp target/release/libbinding.dylib binding.cpython-311-darwin.so
 ```
 
 ## Run
