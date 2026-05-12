@@ -23,7 +23,9 @@
 #define PLAYER_SPEED 5.0f
 #define PLAYER_ROCKET_SPEED 15.0f
 #define ENEMY_ROCKET_SPEED_Y 7.0f
-#define BEZIER_ADVANCE 0.012f
+/* Pixels per frame along the path (speed is stabilized by varying dt along the curve). */
+#define ENEMY_SCREEN_SPEED 4.0f
+#define ENEMY_BEZIER_DT_CAP 0.08f
 #define ENEMY_SHOOT_Y_THRESH 400.0f
 #define SPAWN_INTERVAL 14
 #define SHOOT_INTERVAL 30
@@ -121,26 +123,28 @@ typedef struct {
     Star stars[STAR_LAYERS * MAX_STARS];
 } Galaga;
 
+/* One-way top-to-bottom paths. Enemies enter above the screen (y ~ -15) and
+ * exit below it (y ~ 820). Coordinate space is 1024x768, scaled at runtime. */
 static const BezierPath PATHS[NUM_BEZIER_PATHS] = {
-    {{ /* Path 0 (collection 1) */
-        {{513, -15}, {700, 151}, {888, 650}, {501, 648}},
-        {{501, 648}, {114, 646}, {208, 488}, {235, 343}},
-        {{235, 343}, {262, 198}, {326, -181}, {513, -15}}
+    {{ /* Path 0 – steep diagonal from top-right */
+        {{900, -15}, {950, 120}, {750, 280}, {500, 340}},
+        {{500, 340}, {250, 400}, {150, 550}, {300, 650}},
+        {{300, 650}, {450, 750}, {550, 790}, {512, 820}}
     }},
-    {{ /* Path 1 (collection 2) */
-        {{513, -15}, {430,  11}, {204, 659}, {516, 654}},
-        {{516, 654}, {828, 649}, {420, 388}, {525, 375}},
-        {{525, 375}, {630, 362}, {596, -41}, {513, -15}}
+    {{ /* Path 1 – tight center corkscrew */
+        {{512, -15}, {700, 100}, {300, 200}, {700, 350}},
+        {{700, 350}, {300, 500}, {700, 550}, {400, 620}},
+        {{400, 620}, {200, 680}, {450, 770}, {500, 820}}
     }},
-    {{ /* Path 2 (collection 3) */
-        {{513, -15}, {365,  16}, {663, 556}, {516, 654}},
-        {{516, 654}, {269, 652}, {476, 535}, {528, 393}},
-        {{528, 393}, {480, 251}, {461,  14}, {513, -15}}
+    {{ /* Path 2 – wide arc from top-left */
+        {{100, -15}, { 50, 150}, {200, 350}, {512, 400}},
+        {{512, 400}, {824, 450}, {950, 550}, {750, 650}},
+        {{750, 650}, {550, 750}, {480, 790}, {512, 820}}
     }},
-    {{ /* Path 3 (collection 4) */
-        {{513, -15}, {330,  11}, {204, 659}, {516, 654}},
-        {{516, 654}, {528, 649}, {220, 388}, {525, 375}},
-        {{525, 375}, {530, 362}, {396, -41}, {513, -15}}
+    {{ /* Path 3 – sharp zigzag down the center */
+        {{512, -15}, {250,  80}, {800, 200}, {200, 350}},
+        {{200, 350}, {750, 480}, {250, 550}, {600, 620}},
+        {{600, 620}, {500, 700}, {520, 780}, {490, 820}}
     }}
 };
 
@@ -163,6 +167,26 @@ static Vec2 bezier_path_eval(int path_id, float bezier_t) {
     if (local_t < 0.0f) local_t = 0.0f;
     if (local_t > 1.0f) local_t = 1.0f;
     return bezier_eval(&PATHS[path_id].quartets[qi], local_t);
+}
+
+static Vec2 bezier_deriv(const BezierQuartet *q, float t) {
+    float u = 1.0f - t;
+    float c0 = 3.0f * u * u;
+    float c1 = 6.0f * u * t;
+    float c2 = 3.0f * t * t;
+    Vec2 out;
+    out.x = c0 * (q->p1.x - q->p0.x) + c1 * (q->p2.x - q->p1.x) + c2 * (q->p3.x - q->p2.x);
+    out.y = c0 * (q->p1.y - q->p0.y) + c1 * (q->p2.y - q->p1.y) + c2 * (q->p3.y - q->p2.y);
+    return out;
+}
+
+static Vec2 bezier_path_deriv(int path_id, float bezier_t) {
+    int qi = (int)bezier_t;
+    if (qi >= NUM_QUARTETS) qi = NUM_QUARTETS - 1;
+    float local_t = bezier_t - (float)qi;
+    if (local_t < 0.0f) local_t = 0.0f;
+    if (local_t > 1.0f) local_t = 1.0f;
+    return bezier_deriv(&PATHS[path_id].quartets[qi], local_t);
 }
 
 static int aabb_overlap(float ax, float ay, float ahw, float ahh,
@@ -208,14 +232,26 @@ static void move_enemies(Galaga *env) {
         Enemy *e = &env->enemies[i];
         e->prev_x = e->x;
         e->prev_y = e->y;
-        e->bezier_t += BEZIER_ADVANCE;
-        if (e->bezier_t >= (float)NUM_QUARTETS) {
-            e->active = 0;
-            continue;
+        /* Constant screen speed: arc length per frame ~ ENEMY_SCREEN_SPEED */
+        Vec2 dp = bezier_path_deriv(e->path_id, e->bezier_t);
+        float sx = dp.x * (float)env->width / 1024.0f;
+        float sy = dp.y * (float)env->height / 768.0f;
+        float vmag = sqrtf(sx * sx + sy * sy);
+        float dt = ENEMY_SCREEN_SPEED / fmaxf(vmag, 1e-4f);
+        if (dt > ENEMY_BEZIER_DT_CAP) dt = ENEMY_BEZIER_DT_CAP;
+        e->bezier_t += dt;
+        int wrapped = 0;
+        while (e->bezier_t >= (float)NUM_QUARTETS) {
+            e->bezier_t -= (float)NUM_QUARTETS;
+            wrapped = 1;
         }
         Vec2 pos = bezier_path_eval(e->path_id, e->bezier_t);
         e->x = pos.x * (float)env->width / 1024.0f;
         e->y = pos.y * (float)env->height / 768.0f;
+        if (wrapped) {
+            e->prev_x = e->x;
+            e->prev_y = e->y;
+        }
     }
 }
 
@@ -348,9 +384,7 @@ static void check_enemy_player_collision(Galaga *env) {
 
 static void check_wave_complete(Galaga *env) {
     if (env->enemies_spawned < ENEMIES_PER_WAVE) return;
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (env->enemies[i].active) return;
-    }
+    if (env->enemies_killed < ENEMIES_PER_WAVE) return;
     env->rewards[0] += 0.1f;
     env->wave++;
     env->enemies_spawned = 0;
