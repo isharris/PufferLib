@@ -27,6 +27,8 @@ int main() {
     c_reset(&env);
     c_render(&env);
     while (!WindowShouldClose()) {
+        forward_linearlstm(net, env.observations, env.actions);
+
         if (IsKeyDown(KEY_LEFT_SHIFT)) {
             if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT)) {
                 env.actions[0] = ACTION_LEFT;
@@ -37,8 +39,6 @@ int main() {
             } else {
                 env.actions[0] = ACTION_NOOP;
             }
-        } else {
-            forward_linearlstm(net, env.observations, env.actions);
         }
 
         int was_terminal = env.terminals[0];

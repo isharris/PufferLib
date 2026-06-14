@@ -657,26 +657,30 @@ class PuffeRL:
 
         print('\033[0;0H' + capture.get())
 
+def compute_puff_advantage_torch(values, rewards, terminals, importance,
+        advantages, gamma, gae_lambda, rho_clip, c_clip):
+    '''Pure PyTorch V-trace advantage — runs on any device (MPS/CPU/CUDA).'''
+    horizon = values.shape[1]
+    lastgaelam = torch.zeros(values.shape[0], device=values.device)
+    for t in range(horizon - 2, -1, -1):
+        nextnonterminal = 1.0 - terminals[:, t + 1]
+        rho_t = torch.clamp(importance[:, t], max=rho_clip)
+        c_t = torch.clamp(importance[:, t], max=c_clip)
+        delta = rho_t * (rewards[:, t + 1] + gamma * values[:, t + 1] * nextnonterminal - values[:, t])
+        lastgaelam = delta + gamma * gae_lambda * c_t * lastgaelam * nextnonterminal
+        advantages[:, t] = lastgaelam
+
+
 def compute_puff_advantage(values, rewards, terminals,
         ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip):
-    '''CUDA kernel for puffer advantage with automatic CPU fallback. You need
-    nvcc (in cuda-dev-tools or in a cuda-dev docker base) for PufferLib to
-    compile the fast version.'''
-
-    device = values.device
-    if not ADVANTAGE_CUDA:
-        values = values.cpu()
-        rewards = rewards.cpu()
-        terminals = terminals.cpu()
-        ratio = ratio.cpu()
-        advantages = advantages.cpu()
-
-    torch.ops.pufferlib.compute_puff_advantage(values, rewards, terminals,
-        ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip)
-
-    if not ADVANTAGE_CUDA:
-        return advantages.to(device)
-
+    '''Advantage computation with CUDA kernel or pure PyTorch fallback.
+    The PyTorch path runs on-device (MPS/CPU/CUDA) without copies.'''
+    if ADVANTAGE_CUDA:
+        torch.ops.pufferlib.compute_puff_advantage(values, rewards, terminals,
+            ratio, advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip)
+    else:
+        compute_puff_advantage_torch(values, rewards, terminals, ratio,
+            advantages, gamma, gae_lambda, vtrace_rho_clip, vtrace_c_clip)
     return advantages
 
 

@@ -8,7 +8,7 @@
 
 #define MAX_PLAYER_ROCKETS 2
 #define MAX_ENEMIES 10
-#define MAX_ENEMY_ROCKETS 8
+#define MAX_ENEMY_ROCKETS 6
 #define NUM_BEZIER_PATHS 4
 #define NUM_QUARTETS 3
 #define STAR_LAYERS 3
@@ -22,7 +22,7 @@
 
 #define PLAYER_SPEED 5.0f
 #define PLAYER_ROCKET_SPEED 15.0f
-#define ENEMY_ROCKET_SPEED_Y 7.0f
+#define ENEMY_ROCKET_SPEED_Y 5.0f
 #define BEZIER_ADVANCE 0.012f
 #define ENEMY_SHOOT_Y_THRESH 400.0f
 #define SPAWN_INTERVAL 14
@@ -40,6 +40,10 @@
 #define MAX_TICK 3600
 
 #define MAX_STARS 40
+
+#define KILL_REWARD 0.5f
+#define DEATH_PENALTY 50.0f
+#define WAVE_BONUS 0.5f
 
 static int galaga_render_flag = 0;
 static int galaga_game_over_timer = 0;
@@ -309,7 +313,7 @@ static void check_player_rocket_enemy_collision(Galaga *env) {
                 env->enemies[ei].active = 0;
                 env->enemies_killed++;
                 env->score += SCORE_PER_KILL;
-                env->rewards[0] += 1.0f;
+                env->rewards[0] += KILL_REWARD;
                 break;
             }
         }
@@ -325,7 +329,7 @@ static void check_enemy_rocket_player_collision(Galaga *env) {
                          env->player_x, py,
                          PLAYER_HALF_W, PLAYER_HALF_H)) {
             env->terminals[0] = 1;
-            env->rewards[0] -= 5.0f;
+            env->rewards[0] -= DEATH_PENALTY;
             return;
         }
     }
@@ -340,7 +344,7 @@ static void check_enemy_player_collision(Galaga *env) {
                          env->player_x, py,
                          PLAYER_HALF_W, PLAYER_HALF_H)) {
             env->terminals[0] = 1;
-            env->rewards[0] -= 5.0f;
+            env->rewards[0] -= DEATH_PENALTY;
             return;
         }
     }
@@ -351,7 +355,7 @@ static void check_wave_complete(Galaga *env) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (env->enemies[i].active) return;
     }
-    env->rewards[0] += 0.1f;
+    env->rewards[0] += WAVE_BONUS;
     env->wave++;
     env->enemies_spawned = 0;
     env->enemies_killed = 0;
@@ -515,6 +519,57 @@ static const Color ENEMY_COLORS[3] = {
     {180, 50, 255, 255}
 };
 
+/* Classic Galaga fighter: 0=empty, 1=white, 2=red, 3=cyan/blue, 4=yellow. */
+#define FIGHTER_SPRITE_W 16
+#define FIGHTER_SPRITE_H 16
+#define FIGHTER_SPRITE_SCALE 3
+
+static const unsigned char FIGHTER_SPRITE[FIGHTER_SPRITE_W * FIGHTER_SPRITE_H] = {
+    0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,
+
+    0,0,0,2,0,0,1,1,1,1,0,0,2,0,0,0,
+    0,0,0,2,0,0,1,1,1,1,0,0,2,0,0,0,
+    0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0,
+
+    0,0,0,1,3,0,1,2,2,1,0,3,1,0,0,0,
+    0,0,0,3,1,1,2,2,2,2,1,1,3,0,0,0,
+
+    2,0,0,1,1,1,2,2,2,2,1,1,1,0,0,2,
+    1,0,0,1,1,1,2,1,1,2,1,1,1,0,0,1,
+
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,0,2,2,1,1,1,1,2,2,0,1,1,1,
+    1,1,0,0,2,2,1,1,1,1,2,2,0,0,1,1,
+
+    1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,
+    1,0,0,0,0,0,0,1,1,0,0,0,0,0,0,1,
+};
+
+static const Color FIGHTER_PALETTE[5] = {
+    {0, 0, 0, 0},
+    {255, 255, 255, 255},
+    {255, 50, 40, 255},
+    {0, 220, 255, 255},
+    {255, 230, 40, 255},
+};
+
+static void draw_pixel_sprite(int cx, int cy, int scale,
+        const unsigned char *pixels, int w, int h,
+        const Color *palette) {
+    int left = cx - (w * scale) / 2;
+    int top = cy - (h * scale) / 2;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            unsigned char idx = pixels[y * w + x];
+            if (idx == 0) continue;
+            DrawRectangle(left + x * scale, top + y * scale, scale, scale, palette[idx]);
+        }
+    }
+}
+
 static void draw_stars(Galaga *env) {
     Color layer_colors[STAR_LAYERS] = {GAL_STAR_DIM, GAL_STAR_MID, GAL_STAR_BRIGHT};
     int layer_sizes[STAR_LAYERS] = {3, 2, 1};
@@ -531,16 +586,8 @@ static void draw_player(Galaga *env) {
     if (galaga_game_over_timer > 0) return;
     float px = env->player_x;
     float py = (float)env->height - 40.0f;
-    Vector2 v0 = {px, py - PLAYER_HALF_H};
-    Vector2 v1 = {px - PLAYER_HALF_W * 0.6f, py + PLAYER_HALF_H * 0.5f};
-    Vector2 v2 = {px + PLAYER_HALF_W * 0.6f, py + PLAYER_HALF_H * 0.5f};
-    DrawTriangle(v0, v2, v1, GAL_PLAYER);
-    Vector2 w0 = {px - PLAYER_HALF_W, py + PLAYER_HALF_H};
-    Vector2 w1 = {px - PLAYER_HALF_W * 0.4f, py};
-    Vector2 w2 = {px + PLAYER_HALF_W * 0.4f, py};
-    Vector2 w3 = {px + PLAYER_HALF_W, py + PLAYER_HALF_H};
-    DrawTriangle(w0, w2, w1, GAL_PLAYER);
-    DrawTriangle(w0, w3, w2, GAL_PLAYER);
+    draw_pixel_sprite((int)px, (int)py, FIGHTER_SPRITE_SCALE,
+        FIGHTER_SPRITE, FIGHTER_SPRITE_W, FIGHTER_SPRITE_H, FIGHTER_PALETTE);
 }
 
 static void draw_player_rockets(Galaga *env) {
